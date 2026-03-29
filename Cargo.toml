@@ -9,7 +9,7 @@ authors = [
     "Lilith River <lilith@imazen.io>",
 ]
 keywords = ["cargo", "subcommand", "download", "fetch", "llm"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 categories = ["development-tools", "development-tools::cargo-plugins"]
 repository = "https://github.com/imazen/cargo-read.git"

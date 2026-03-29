@@ -103,4 +103,4 @@ Crates are cached in `~/.cache/cargo-read/` (or `$XDG_CACHE_HOME/cargo-read/`, o
 
 ## License
 
-MIT (forked from [Xion/cargo-download](https://github.com/Xion/cargo-download))
+MIT OR Apache-2.0 (forked from [Xion/cargo-download](https://github.com/Xion/cargo-download))
