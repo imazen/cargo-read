@@ -1,5 +1,8 @@
+#![forbid(unsafe_code)]
+
 mod args;
 
+use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -14,7 +17,7 @@ const CRATES_API_ROOT: &str = "https://crates.io/api/v1/crates";
 const USER_AGENT: &str = "cargo-read (https://github.com/imazen/cargo-read)";
 
 /// Crate metadata fetched from crates.io.
-#[derive(Default, Serialize)]
+#[derive(Clone, Default, Serialize)]
 struct CrateMeta {
     name: String,
     version: String,
@@ -112,74 +115,86 @@ fn main() {
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     } else {
-        print_natural(&meta, &crate_dir, readme.as_deref(), &files);
+        print!(
+            "{}",
+            format_natural(&meta, &crate_dir, readme.as_deref(), &files)
+        );
     }
 }
 
-/// Print the default human/LLM-readable output.
-fn print_natural(meta: &CrateMeta, crate_dir: &Path, readme: Option<&str>, files: &[String]) {
+/// Format the default human/LLM-readable output.
+fn format_natural(
+    meta: &CrateMeta,
+    crate_dir: &Path,
+    readme: Option<&str>,
+    files: &[String],
+) -> String {
+    let mut out = String::new();
+
     // Frontmatter
-    println!("---");
-    println!("crate: {}", meta.name);
-    println!("version: {}", meta.version);
+    writeln!(out, "---").unwrap();
+    writeln!(out, "crate: {}", meta.name).unwrap();
+    writeln!(out, "version: {}", meta.version).unwrap();
     if let Some(ref desc) = meta.description {
-        println!("description: {}", desc);
+        writeln!(out, "description: {desc}").unwrap();
     }
     if let Some(ref license) = meta.license {
-        println!("license: {}", license);
+        writeln!(out, "license: {license}").unwrap();
     }
     if let Some(ref repo) = meta.repository {
-        println!("repository: {}", repo);
+        writeln!(out, "repository: {repo}").unwrap();
     }
     if let Some(ref hp) = meta.homepage {
         if meta.repository.as_deref() != Some(hp) {
-            println!("homepage: {}", hp);
+            writeln!(out, "homepage: {hp}").unwrap();
         }
     }
     if let Some(ref docs) = meta.documentation {
-        println!("documentation: {}", docs);
+        writeln!(out, "documentation: {docs}").unwrap();
     }
     if let Some(ref msrv) = meta.rust_version {
-        println!("rust-version: {}", msrv);
+        writeln!(out, "rust-version: {msrv}").unwrap();
     }
     if let Some(ref ed) = meta.edition {
-        println!("edition: {}", ed);
+        writeln!(out, "edition: {ed}").unwrap();
     }
     if let Some(size) = meta.crate_size {
-        println!("crate-size: {}", format_bytes(size));
+        writeln!(out, "crate-size: {}", format_bytes(size)).unwrap();
     }
     if let Some(dl) = meta.downloads {
-        println!("downloads: {}", format_number(dl));
+        writeln!(out, "downloads: {}", format_number(dl)).unwrap();
     }
     if !meta.keywords.is_empty() {
-        println!("keywords: {}", meta.keywords.join(", "));
+        writeln!(out, "keywords: {}", meta.keywords.join(", ")).unwrap();
     }
     if !meta.categories.is_empty() {
-        println!("categories: {}", meta.categories.join(", "));
+        writeln!(out, "categories: {}", meta.categories.join(", ")).unwrap();
     }
     if !meta.features.is_empty() {
-        println!("features: {}", meta.features.join(", "));
+        writeln!(out, "features: {}", meta.features.join(", ")).unwrap();
     }
-    println!("path: {}", crate_dir.display());
-    println!("---");
+    writeln!(out, "path: {}", crate_dir.display()).unwrap();
+    writeln!(out, "---").unwrap();
 
     // README
     if let Some(readme) = readme {
-        println!();
-        print!("{}", readme);
+        writeln!(out).unwrap();
+        out.push_str(readme);
         if !readme.ends_with('\n') {
-            println!();
+            writeln!(out).unwrap();
         }
     }
 
     // File listing with absolute paths
-    println!();
-    println!("## Files");
-    println!();
+    writeln!(out).unwrap();
+    writeln!(out, "## Files").unwrap();
+    writeln!(out).unwrap();
     for f in files {
         let abs = crate_dir.join(f);
-        println!("{}", abs.display());
+        writeln!(out, "{}", abs.display()).unwrap();
     }
+
+    out
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -226,7 +241,6 @@ fn resolve_version_and_meta(
     spec: &CrateSpec,
     verbose: bool,
 ) -> Result<(Version, CrateMeta), Box<dyn std::error::Error>> {
-    // Fetch version list to resolve the best match
     let versions_url = format!("{}/{}/versions", CRATES_API_ROOT, spec.name);
     if verbose {
         eprintln!("fetching versions from {}", versions_url);
@@ -485,5 +499,390 @@ fn collect_files(base: &Path, dir: &Path, out: &mut Vec<String>) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    // ── parse_crate_spec ──────────────────────────────────────────
+
+    #[test]
+    fn parse_spec_name_only() {
+        let spec = parse_crate_spec("serde");
+        assert_eq!(spec.name, "serde");
+        assert!(spec.version_req.is_none());
+    }
+
+    #[test]
+    fn parse_spec_with_spaces() {
+        let spec = parse_crate_spec("  serde  ");
+        assert_eq!(spec.name, "serde");
+        assert!(spec.version_req.is_none());
+    }
+
+    #[test]
+    fn parse_spec_exact_version() {
+        let spec = parse_crate_spec("serde==1.0.200");
+        assert_eq!(spec.name, "serde");
+        assert_eq!(spec.version_req.as_deref(), Some("=1.0.200"));
+    }
+
+    #[test]
+    fn parse_spec_caret_version() {
+        let spec = parse_crate_spec("serde=^1.0");
+        assert_eq!(spec.name, "serde");
+        assert_eq!(spec.version_req.as_deref(), Some("^1.0"));
+    }
+
+    #[test]
+    fn parse_spec_tilde_version() {
+        let spec = parse_crate_spec("serde=~1.0");
+        assert_eq!(spec.name, "serde");
+        assert_eq!(spec.version_req.as_deref(), Some("~1.0"));
+    }
+
+    #[test]
+    fn parse_spec_bare_version() {
+        let spec = parse_crate_spec("serde=1.0.200");
+        assert_eq!(spec.name, "serde");
+        assert_eq!(spec.version_req.as_deref(), Some("1.0.200"));
+    }
+
+    #[test]
+    fn parse_spec_empty_version() {
+        let spec = parse_crate_spec("serde=");
+        assert_eq!(spec.name, "serde");
+        assert!(spec.version_req.is_none());
+    }
+
+    #[test]
+    fn parse_spec_hyphenated_name() {
+        let spec = parse_crate_spec("my-crate=^0.1");
+        assert_eq!(spec.name, "my-crate");
+        assert_eq!(spec.version_req.as_deref(), Some("^0.1"));
+    }
+
+    #[test]
+    fn parse_spec_underscore_name() {
+        let spec = parse_crate_spec("my_crate");
+        assert_eq!(spec.name, "my_crate");
+        assert!(spec.version_req.is_none());
+    }
+
+    // ── format_bytes ──────────────────────────────────────────────
+
+    #[test]
+    fn format_bytes_small() {
+        assert_eq!(format_bytes(0), "0 bytes");
+        assert_eq!(format_bytes(512), "512 bytes");
+        assert_eq!(format_bytes(1023), "1023 bytes");
+    }
+
+    #[test]
+    fn format_bytes_kb() {
+        assert_eq!(format_bytes(1024), "1.0 KB");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+        assert_eq!(format_bytes(81_715), "79.8 KB");
+    }
+
+    #[test]
+    fn format_bytes_mb() {
+        assert_eq!(format_bytes(1_048_576), "1.0 MB");
+        assert_eq!(format_bytes(5_242_880), "5.0 MB");
+    }
+
+    // ── format_number ─────────────────────────────────────────────
+
+    #[test]
+    fn format_number_small() {
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(999), "999");
+    }
+
+    #[test]
+    fn format_number_thousands() {
+        assert_eq!(format_number(1_000), "1.0K");
+        assert_eq!(format_number(1_500), "1.5K");
+        assert_eq!(format_number(70_525), "70.5K");
+    }
+
+    #[test]
+    fn format_number_millions() {
+        assert_eq!(format_number(1_000_000), "1.0M");
+        assert_eq!(format_number(894_900_000), "894.9M");
+    }
+
+    // ── find_readme ───────────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn make_temp_dir() -> PathBuf {
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("cargo-read-test-{}-{}", std::process::id(), id));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn find_readme_standard_md() {
+        let dir = make_temp_dir();
+        fs::write(dir.join("README.md"), "# Hello").unwrap();
+        assert_eq!(find_readme(&dir).as_deref(), Some("# Hello"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_readme_lowercase() {
+        let dir = make_temp_dir();
+        fs::write(dir.join("readme.md"), "lower").unwrap();
+        assert_eq!(find_readme(&dir).as_deref(), Some("lower"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_readme_plain_text() {
+        let dir = make_temp_dir();
+        fs::write(dir.join("README"), "plain").unwrap();
+        assert_eq!(find_readme(&dir).as_deref(), Some("plain"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_readme_from_cargo_toml() {
+        let dir = make_temp_dir();
+        fs::write(dir.join("Cargo.toml"), "readme = \"docs/ABOUT.md\"\n").unwrap();
+        fs::create_dir_all(dir.join("docs")).unwrap();
+        fs::write(dir.join("docs/ABOUT.md"), "custom readme").unwrap();
+        assert_eq!(find_readme(&dir).as_deref(), Some("custom readme"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_readme_cargo_toml_missing_file_falls_back() {
+        let dir = make_temp_dir();
+        fs::write(dir.join("Cargo.toml"), "readme = \"MISSING.md\"\n").unwrap();
+        fs::write(dir.join("README.md"), "fallback").unwrap();
+        assert_eq!(find_readme(&dir).as_deref(), Some("fallback"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_readme_none() {
+        let dir = make_temp_dir();
+        assert!(find_readme(&dir).is_none());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn find_readme_priority_md_over_plain() {
+        let dir = make_temp_dir();
+        fs::write(dir.join("README.md"), "markdown").unwrap();
+        fs::write(dir.join("README"), "plain").unwrap();
+        assert_eq!(find_readme(&dir).as_deref(), Some("markdown"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── list_files / collect_files ────────────────────────────────
+
+    #[test]
+    fn list_files_basic() {
+        let dir = make_temp_dir();
+        fs::write(dir.join("lib.rs"), "").unwrap();
+        fs::write(dir.join("README.md"), "").unwrap();
+        fs::write(dir.join("data.json"), "").unwrap(); // should be excluded
+        let files = list_files(&dir);
+        assert_eq!(files, vec!["README.md", "lib.rs"]);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn list_files_nested() {
+        let dir = make_temp_dir();
+        fs::create_dir_all(dir.join("src/sub")).unwrap();
+        fs::write(dir.join("src/main.rs"), "").unwrap();
+        fs::write(dir.join("src/sub/helper.rs"), "").unwrap();
+        fs::write(dir.join("CHANGELOG.md"), "").unwrap();
+        let files = list_files(&dir);
+        assert_eq!(
+            files,
+            vec!["CHANGELOG.md", "src/main.rs", "src/sub/helper.rs"]
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn list_files_empty_dir() {
+        let dir = make_temp_dir();
+        let files = list_files(&dir);
+        assert!(files.is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn list_files_excludes_non_rs_md() {
+        let dir = make_temp_dir();
+        fs::write(dir.join("Cargo.toml"), "").unwrap();
+        fs::write(dir.join("build.py"), "").unwrap();
+        fs::write(dir.join("data.csv"), "").unwrap();
+        let files = list_files(&dir);
+        assert!(files.is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── format_natural ────────────────────────────────────────────
+
+    #[test]
+    fn format_natural_minimal_meta() {
+        let meta = CrateMeta {
+            name: "foo".into(),
+            version: "1.0.0".into(),
+            ..Default::default()
+        };
+        let dir = PathBuf::from("/tmp/foo-1.0.0");
+        let output = format_natural(&meta, &dir, None, &[]);
+
+        assert!(output.starts_with("---\n"));
+        assert!(output.contains("crate: foo\n"));
+        assert!(output.contains("version: 1.0.0\n"));
+        assert!(output.contains("path: /tmp/foo-1.0.0\n"));
+        assert!(output.contains("---\n"));
+        assert!(output.contains("## Files\n"));
+        // No description/license/etc lines
+        assert!(!output.contains("description:"));
+        assert!(!output.contains("license:"));
+    }
+
+    #[test]
+    fn format_natural_full_meta() {
+        let meta = CrateMeta {
+            name: "bar".into(),
+            version: "2.3.4".into(),
+            description: Some("A test crate".into()),
+            license: Some("MIT".into()),
+            repository: Some("https://github.com/test/bar".into()),
+            homepage: Some("https://bar.dev".into()),
+            documentation: Some("https://docs.rs/bar".into()),
+            rust_version: Some("1.70".into()),
+            edition: Some("2021".into()),
+            crate_size: Some(51_200),
+            downloads: Some(1_500_000),
+            keywords: vec!["test".into(), "bar".into()],
+            categories: vec!["Testing".into()],
+            features: vec!["default".into(), "serde".into()],
+        };
+        let dir = PathBuf::from("/cache/bar-2.3.4");
+        let readme = Some("# Bar\nA crate.\n");
+        let files = vec!["README.md".into(), "src/lib.rs".into()];
+        let output = format_natural(&meta, &dir, readme, &files);
+
+        assert!(output.contains("description: A test crate\n"));
+        assert!(output.contains("license: MIT\n"));
+        assert!(output.contains("repository: https://github.com/test/bar\n"));
+        assert!(output.contains("homepage: https://bar.dev\n"));
+        assert!(output.contains("documentation: https://docs.rs/bar\n"));
+        assert!(output.contains("rust-version: 1.70\n"));
+        assert!(output.contains("edition: 2021\n"));
+        assert!(output.contains("crate-size: 50.0 KB\n"));
+        assert!(output.contains("downloads: 1.5M\n"));
+        assert!(output.contains("keywords: test, bar\n"));
+        assert!(output.contains("categories: Testing\n"));
+        assert!(output.contains("features: default, serde\n"));
+        assert!(output.contains("# Bar\nA crate.\n"));
+        assert!(output.contains("/cache/bar-2.3.4/README.md\n"));
+        assert!(output.contains("/cache/bar-2.3.4/src/lib.rs\n"));
+    }
+
+    #[test]
+    fn format_natural_homepage_same_as_repo_suppressed() {
+        let meta = CrateMeta {
+            name: "x".into(),
+            version: "0.1.0".into(),
+            repository: Some("https://github.com/a/b".into()),
+            homepage: Some("https://github.com/a/b".into()),
+            ..Default::default()
+        };
+        let dir = PathBuf::from("/tmp/x-0.1.0");
+        let output = format_natural(&meta, &dir, None, &[]);
+        assert!(output.contains("repository:"));
+        assert!(!output.contains("homepage:"));
+    }
+
+    #[test]
+    fn format_natural_readme_without_trailing_newline() {
+        let meta = CrateMeta {
+            name: "x".into(),
+            version: "0.1.0".into(),
+            ..Default::default()
+        };
+        let dir = PathBuf::from("/tmp/x-0.1.0");
+        let output = format_natural(&meta, &dir, Some("no newline"), &[]);
+        // Should still have a newline after the readme
+        assert!(output.contains("no newline\n"));
+    }
+
+    // ── JSON output structure ─────────────────────────────────────
+
+    #[test]
+    fn json_output_has_flattened_meta() {
+        let output = JsonOutput {
+            meta: CrateMeta {
+                name: "test".into(),
+                version: "1.0.0".into(),
+                license: Some("MIT".into()),
+                ..Default::default()
+            },
+            path: "/tmp/test-1.0.0".into(),
+            readme: Some("hello".into()),
+            files: vec!["src/lib.rs".into()],
+        };
+        let json_str = serde_json::to_string(&output).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+        // Flattened — no nested "meta" object
+        assert_eq!(v["name"], "test");
+        assert_eq!(v["version"], "1.0.0");
+        assert_eq!(v["license"], "MIT");
+        assert_eq!(v["path"], "/tmp/test-1.0.0");
+        assert_eq!(v["readme"], "hello");
+        assert_eq!(v["files"][0], "src/lib.rs");
+        assert!(v.get("meta").is_none());
+    }
+
+    // ── Integration test (network) ────────────────────────────────
+
+    #[test]
+    #[ignore] // requires network — run with: cargo test -- --ignored
+    fn integration_download_and_read() {
+        let dir = std::env::temp_dir().join("cargo-read-integration-test");
+        let _ = fs::remove_dir_all(&dir);
+
+        let spec = CrateSpec {
+            name: "whereat".into(),
+            version_req: Some("=0.1.4".into()),
+        };
+        let (version, meta) = resolve_version_and_meta(&spec, false).unwrap();
+        assert_eq!(version.to_string(), "0.1.4");
+        assert_eq!(meta.license.as_deref(), Some("MIT OR Apache-2.0"));
+
+        download_and_extract("whereat", &version, &dir).unwrap();
+        let crate_dir = dir.join("whereat-0.1.4");
+        assert!(crate_dir.exists());
+
+        let readme = find_readme(&crate_dir);
+        assert!(readme.is_some());
+        assert!(readme.unwrap().contains("whereat"));
+
+        let files = list_files(&crate_dir);
+        assert!(files.contains(&"src/lib.rs".to_string()));
+        assert!(files.iter().any(|f| f.ends_with(".md")));
+
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

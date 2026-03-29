@@ -1,43 +1,91 @@
-# cargo-download
+# cargo-read ![CI](https://img.shields.io/github/actions/workflow/status/imazen/cargo-read/ci.yml?style=flat-square&label=CI) ![crates.io](https://img.shields.io/crates/v/cargo-read?style=flat-square) [![lib.rs](https://img.shields.io/crates/v/cargo-read?style=flat-square&label=lib.rs&color=blue)](https://lib.rs/crates/cargo-read) ![docs.rs](https://img.shields.io/docsrs/cargo-read?style=flat-square) ![License](https://img.shields.io/crates/l/cargo-read?style=flat-square)
 
-[![crates.io](https://img.shields.io/crates/v/cargo-download.svg)](https://crates.io/crates/cargo-download)
-[![Build Status](https://travis-ci.org/Xion/cargo-download.svg?branch=master)](https://travis-ci.org/Xion/cargo-download)
+Download crate source and show README + metadata. Designed for LLM tool use.
 
-A cargo subcommand for downloading crates from _crates.io_
+## What it does
 
-## About
+`cargo read` downloads a crate from crates.io, extracts it to a local cache, and prints:
 
-`cargo-download` can be used to download a gzipped archive of given crate,
-in the exact form that it was uploaded to _crates.io_.
+1. **Frontmatter** — version, license, repository, MSRV, features, downloads, etc.
+2. **README** — the crate's README content
+3. **File listing** — absolute paths to every `.rs` and `.md` file (clickable in terminals/IDEs)
 
-This can be useful for a variety of things, such as:
+It always checks crates.io for the latest version, even if a cached copy exists. If the version hasn't changed, it uses the cache.
 
-* checking in your dependencies in source control (if your team/organization follows this practice)
-* mirroring _crates.io_ for reproducible CI/CD pipelines
-* security auditing of crates (esp. when a crate repository is missing)
-* reproducing a bug that only occurs in uploaded versions of your crate
+## Install
 
-## Installation
-
-`cargo-download` can be installed with `cargo install`:
-
-    $ cargo install cargo-download
-
-This shall put the `cargo-download` executable in your Cargo binary directory
-(e.g. `~/.cargo/bin`), which hopefully is in your `$PATH`.
+```
+cargo install cargo-read
+```
 
 ## Usage
 
-To download the newest version of `foo` crate, do this:
+```
+cargo read serde
+```
 
-    $ cargo download foo >foo.gz
+Default output:
 
-You can also use the standard _Cargo.toml_ notation to specify a particular version:
+```
+---
+crate: serde
+version: 1.0.228
+description: A generic serialization/deserialization framework
+license: MIT OR Apache-2.0
+repository: https://github.com/serde-rs/serde
+documentation: https://docs.rs/serde
+rust-version: 1.56
+edition: 2021
+crate-size: 81.7 KB
+downloads: 894.9M
+keywords: no_std, serde, serialization
+features: alloc, default, derive, rc, std, unstable
+path: /home/user/.cache/cargo-read/serde-1.0.228
+---
 
-    $ cargo download foo==0.9 >foo-0.9.gz
+[README content here]
 
-For more detailed usage instructions, run `cargo download --help`.
+## Files
+
+/home/user/.cache/cargo-read/serde-1.0.228/README.md
+/home/user/.cache/cargo-read/serde-1.0.228/src/lib.rs
+...
+```
+
+### Version specifiers
+
+```
+cargo read serde              # latest
+cargo read serde==1.0.200     # exact version
+cargo read serde=^1.0         # semver-compatible
+cargo read serde=~1.0         # tilde requirement
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output structured JSON with all metadata, readme, and file list |
+| `--path-only` | Print only the extracted directory path |
+| `--readme-only` | Print only the README content |
+| `--force` | Re-download even if the version is already cached |
+| `--cache-dir DIR` | Override the cache directory (default: `~/.cache/cargo-read/`) |
+| `-v, --verbose` | Show download progress on stderr |
+
+### JSON output
+
+```
+cargo read --json serde
+```
+
+Returns a single JSON object with all metadata fields at the top level, plus `path`, `readme`, and `files`.
+
+## Cache
+
+Crates are cached in `~/.cache/cargo-read/` (or `$XDG_CACHE_HOME/cargo-read/`, or `%LOCALAPPDATA%\cargo-read\` on Windows). Each version gets its own directory named `{crate}-{version}`.
+
+The latest version is always checked against crates.io. If the cached version matches, no download happens.
 
 ## License
 
-`cargo-download` is licensed under the terms of the MIT license.
+MIT (forked from [Xion/cargo-download](https://github.com/Xion/cargo-download))
