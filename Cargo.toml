@@ -1,6 +1,6 @@
 [package]
 name = "cargo-read"
-version = "0.3.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Download crate source and show README + metadata, designed for LLM tool use"
