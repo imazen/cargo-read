@@ -22,10 +22,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all-features
       - name: Smoke test (network)
-        run: cargo run -- --path-only serde
-        env:
-          HOME: ${{ runner.temp }}
-          LOCALAPPDATA: ${{ runner.temp }}
+        run: cargo run -- --path-only --cache-dir "${{ runner.temp }}/cargo-read-cache" serde
 
   clippy:
     runs-on: ubuntu-latest
