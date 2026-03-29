@@ -28,8 +28,12 @@ pub struct Args {
     pub json: bool,
 
     /// Show public API skeleton (source-level scan, no compilation needed)
-    #[arg(long, conflicts_with_all = ["path_only", "readme_only"])]
+    #[arg(long, conflicts_with_all = ["path_only", "readme_only", "docs"])]
     pub api: bool,
+
+    /// Show public API with doc comments (source-level extraction)
+    #[arg(long, conflicts_with_all = ["path_only", "readme_only", "api"])]
+    pub docs: bool,
 
     /// Output only the extracted directory path
     #[arg(long)]

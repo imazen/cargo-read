@@ -116,7 +116,7 @@ fn main() {
                 process::exit(1);
             }
         }
-    } else if args.api {
+    } else if args.api || args.docs {
         let api_items = api_scan::scan_public_api(&crate_dir, &spec.name);
         if args.json {
             let output = ApiJsonOutput {
@@ -125,6 +125,11 @@ fn main() {
                 items: api_items,
             };
             println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        } else if args.docs {
+            print!(
+                "{}",
+                api_scan::format_docs(&spec.name, &crate_dir, &api_items)
+            );
         } else {
             print!(
                 "{}",
@@ -223,7 +228,7 @@ fn format_natural(
     writeln!(out).unwrap();
     writeln!(
         out,
-        "Hint: Run `cargo read --api {crate_name}` to see the public API structure"
+        "Hint: Run `cargo read --api {crate_name}` for API structure, `cargo read --docs {crate_name}` for API docs"
     )
     .unwrap();
 
@@ -788,6 +793,7 @@ mod tests {
         assert!(output.contains("---\n"));
         assert!(output.contains("## Files\n"));
         assert!(output.contains("cargo read --api foo"));
+        assert!(output.contains("cargo read --docs foo"));
         // No description/license/etc lines
         assert!(!output.contains("description:"));
         assert!(!output.contains("license:"));

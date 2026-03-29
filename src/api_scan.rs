@@ -27,6 +27,9 @@ pub struct ApiItem {
     /// cfg gate, if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cfg: Option<String>,
+    /// Doc comment lines (stripped of `///` prefix)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub docs: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -92,14 +95,104 @@ pub fn format_api(crate_name: &str, crate_dir: &Path, items: &[ApiItem]) -> Stri
 
     if !items.is_empty() {
         writeln!(out).unwrap();
+        writeln!(out).unwrap();
         writeln!(
             out,
-            "Hint: Read any file above for full details. Use `cargo read {crate_name}` for README."
+            "Hint: Run `cargo read --docs {crate_name}` for API docs with descriptions."
         )
         .unwrap();
     }
 
     out
+}
+
+/// Format scanned API items with doc comments — full documentation view.
+pub fn format_docs(crate_name: &str, crate_dir: &Path, items: &[ApiItem]) -> String {
+    let mut out = String::new();
+
+    // Module-level docs from lib.rs
+    let lib_rs = crate_dir.join("src/lib.rs");
+    if let Some(module_docs) = extract_module_docs(&lib_rs) {
+        if !module_docs.is_empty() {
+            for line in &module_docs {
+                writeln!(out, "{line}").unwrap();
+            }
+            writeln!(out).unwrap();
+            writeln!(out, "---").unwrap();
+            writeln!(out).unwrap();
+        }
+    }
+
+    let mut current_module = String::new();
+    for item in items {
+        let module = item_module(&item.path);
+        if module != current_module {
+            if !current_module.is_empty() {
+                writeln!(out).unwrap();
+            }
+            current_module = module.clone();
+            writeln!(out, "# {module}").unwrap();
+            writeln!(out).unwrap();
+        }
+
+        let abs_path = crate_dir.join(&item.file);
+        let loc = format!("{}:{}", abs_path.display(), item.line);
+
+        // Signature as a code block
+        if let Some(ref cfg) = item.cfg {
+            writeln!(out, "#[cfg({cfg})]").unwrap();
+        }
+        writeln!(out, "### `{}`", item.signature).unwrap();
+        writeln!(out, "<sub>{loc}</sub>").unwrap();
+
+        // Doc comment
+        if !item.docs.is_empty() {
+            writeln!(out).unwrap();
+            for line in &item.docs {
+                writeln!(out, "{line}").unwrap();
+            }
+        }
+
+        writeln!(out).unwrap();
+    }
+
+    if !items.is_empty() {
+        writeln!(
+            out,
+            "Hint: Read source files directly for implementation details. Use `cargo read {crate_name}` for README."
+        )
+        .unwrap();
+    }
+
+    out
+}
+
+/// Extract `//!` module-level doc comments from the top of a file.
+fn extract_module_docs(file: &Path) -> Option<Vec<String>> {
+    let content = fs::read_to_string(file).ok()?;
+    let mut docs = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//!") {
+            let doc = trimmed
+                .strip_prefix("//! ")
+                .unwrap_or(trimmed.strip_prefix("//!").unwrap_or(""));
+            docs.push(doc.to_string());
+        } else if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("//") {
+            // Allow blank lines, attributes, and regular comments between module docs
+            if !docs.is_empty() && trimmed.is_empty() {
+                docs.push(String::new());
+            }
+            continue;
+        } else {
+            break;
+        }
+    }
+    // Trim trailing empty lines
+    while docs.last().is_some_and(|l| l.is_empty()) {
+        docs.pop();
+    }
+    Some(docs)
 }
 
 fn item_module(path: &str) -> String {
@@ -128,6 +221,7 @@ fn scan_module(crate_dir: &Path, file: &Path, module_path: &str, items: &mut Vec
     let mut impl_stack: Vec<(i32, String)> = Vec::new(); // (depth, type_name)
     let mut skip_until_depth: Vec<i32> = Vec::new(); // brace depths to skip past (macro_rules!, non-pub mod)
     let mut pending_cfg: Option<String> = None;
+    let mut pending_docs: Vec<String> = Vec::new();
     let mut doc_hidden = false;
     let mut in_block_comment = false;
 
@@ -149,7 +243,15 @@ fn scan_module(crate_dir: &Path, file: &Path, module_path: &str, items: &mut Vec
             continue;
         }
 
-        // Skip line comments
+        // Collect doc comments, skip other comments
+        if line.starts_with("///") {
+            let doc = line
+                .strip_prefix("/// ")
+                .unwrap_or(line.strip_prefix("///").unwrap_or(""));
+            pending_docs.push(doc.to_string());
+            i += 1;
+            continue;
+        }
         if line.starts_with("//") {
             i += 1;
             continue;
@@ -228,9 +330,10 @@ fn scan_module(crate_dir: &Path, file: &Path, module_path: &str, items: &mut Vec
 
         // Only look for pub items
         if !line.starts_with("pub ") && !line.starts_with("pub(") {
-            // Clear pending attributes if we hit a non-attribute, non-blank line
+            // Clear pending state if we hit a non-attribute, non-blank line
             if !line.is_empty() && !line.starts_with('#') {
                 pending_cfg = None;
+                pending_docs.clear();
                 doc_hidden = false;
             }
             i += 1;
@@ -241,6 +344,7 @@ fn scan_module(crate_dir: &Path, file: &Path, module_path: &str, items: &mut Vec
         if line.starts_with("pub(") {
             i += 1;
             pending_cfg = None;
+            pending_docs.clear();
             doc_hidden = false;
             continue;
         }
@@ -249,12 +353,14 @@ fn scan_module(crate_dir: &Path, file: &Path, module_path: &str, items: &mut Vec
         if doc_hidden {
             doc_hidden = false;
             pending_cfg = None;
+            pending_docs.clear();
             i += 1;
             continue;
         }
 
         let line_num = i + 1;
         let cfg = pending_cfg.take();
+        let docs = std::mem::take(&mut pending_docs);
 
         // Parse the pub item
         if let Some(item) = parse_pub_item(line, &lines, &mut i, module_path, &impl_stack) {
@@ -265,6 +371,7 @@ fn scan_module(crate_dir: &Path, file: &Path, module_path: &str, items: &mut Vec
                 file: rel_file.clone(),
                 line: line_num,
                 cfg,
+                docs,
             });
 
             // If it's a pub mod, recurse into the submodule
