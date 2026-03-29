@@ -1,202 +1,252 @@
-//!
-//! cargo-download
-//!
-
-             extern crate ansi_term;
-#[macro_use] extern crate clap;
-             extern crate conv;
-#[macro_use] extern crate derive_error;
-             extern crate exitcode;
-             extern crate flate2;
-             extern crate isatty;
-#[macro_use] extern crate lazy_static;
-#[macro_use] extern crate maplit;
-             extern crate reqwest;
-             extern crate semver;
-             extern crate serde_json;
-             extern crate slog_envlogger;
-             extern crate slog_stdlog;
-             extern crate slog_stream;
-             extern crate time;
-             extern crate tar;
-
-// `slog` must precede `log` in declarations here, because we want to simultaneously:
-// * use the standard `log` macros
-// * be able to initialize the slog logger using slog macros like o!()
-#[macro_use] extern crate slog;
-#[macro_use] extern crate log;
-
-
 mod args;
-mod logging;
 
-
-use std::borrow::Cow;
 use std::fs;
-use std::io::{self, Read, Write};
-use std::error::Error;
-use std::path::PathBuf;
-use std::process::exit;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process;
 
-use log::LogLevel::*;
-use reqwest::header::CONTENT_LENGTH;
-use semver::Version;
-use serde_json::Value as Json;
+use semver::{Version, VersionReq};
+use serde::Serialize;
 
-use args::{ArgsError, Crate, Output};
+use args::{CrateSpec, parse_crate_spec};
 
+const CRATES_API_ROOT: &str = "https://crates.io/api/v1/crates";
 
-lazy_static! {
-    /// Application / package name, as filled out by Cargo.
-    static ref NAME: &'static str = option_env!("CARGO_PKG_NAME")
-        .unwrap_or("cargo-download");
-
-    /// Application version, as filled out by Cargo.
-    static ref VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
+/// JSON output format — designed for LLM consumption.
+#[derive(Serialize)]
+struct Output {
+    /// Crate name
+    name: String,
+    /// Resolved version string
+    version: String,
+    /// Absolute path to the extracted source directory
+    path: String,
+    /// README content, if found
+    readme: Option<String>,
 }
 
-
 fn main() {
-    let opts = args::parse().unwrap_or_else(|e| {
-        print_args_error(e).unwrap();
-        exit(exitcode::USAGE);
-    });
+    let args = args::parse();
+    let spec = parse_crate_spec(&args.crate_spec);
 
-    logging::init(opts.verbosity).unwrap();
-    log_signature();
-
-    let version = match opts.crate_.exact_version() {
-        Some(v) => {
-            debug!("Exact crate version given in arguments, not querying crates.io");
-            Cow::Borrowed(v)
+    // Resolve version from crates.io (always, even if cached)
+    let version = match resolve_version(&spec, args.verbose) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!(
+                "error: failed to resolve version for `{}`: {}",
+                spec.name, e
+            );
+            process::exit(1);
         }
-        None => Cow::Owned(get_newest_version(&opts.crate_).unwrap_or_else(|e| {
-            error!("Failed to get the newest version of crate {}: {}", opts.crate_, e);
-            exit(exitcode::TEMPFAIL);
-        })),
     };
-    let crate_bytes = download_crate(&opts.crate_.name(), &version).unwrap_or_else(|e| {
-        error!("Failed to download crate `{}=={}`: {}", opts.crate_.name(), version, e);
-        exit(exitcode::TEMPFAIL);
-    });
 
-    if opts.extract {
-        // Extract to a directory named $CRATE-$VERSION
-        // Due to how crate archives are structured (they contain
-        // single top-level directory) this is done automatically
-        // if you simply extract them in $CWD.
-        let dir: PathBuf = format!("./{}-{}", opts.crate_.name(), version).into();
-        debug!("Extracting crate archive to {}/", dir.display());
-        let gzip = flate2::read::GzDecoder::new(&crate_bytes[..]).unwrap();
-        let mut archive = tar::Archive::new(gzip);
-        match archive.unpack(".") {
-            Ok(_) => {
-                // If -x option was passed, we need to move the extracted directory
-                // to wherever the user wanted.
-                let mut dir = dir;
-                if let Some(&Output::Path(ref p)) = opts.output.as_ref() {
-                    fs::rename(&dir, p).unwrap_or_else(|e| {
-                        error!("Failed to move extracted archive from {} to {}: {}",
-                            dir.display(), p.display(), e);
-                        exit(exitcode::IOERR)
-                    });
-                    dir = p.clone();
-                }
-                info!("Crate content extracted to {}/", dir.display());
-            }
+    // Determine cache directory
+    let cache_root = args.cache_dir.unwrap_or_else(default_cache_dir);
+    let crate_dir = cache_root.join(format!("{}-{}", spec.name, version));
+
+    // Download and extract if not cached (or --force)
+    if args.force || !crate_dir.exists() {
+        if args.verbose {
+            eprintln!("downloading {}=={}", spec.name, version);
+        }
+        match download_and_extract(&spec.name, &version, &cache_root) {
+            Ok(_) => {}
             Err(e) => {
-                error!("Couldn't extract crate to {}/: {}", dir.display(), e);
-                exit(exitcode::TEMPFAIL)
+                eprintln!(
+                    "error: failed to download `{}=={}`: {}",
+                    spec.name, version, e
+                );
+                process::exit(1);
+            }
+        }
+    } else if args.verbose {
+        eprintln!("using cached {}=={}", spec.name, version);
+    }
+
+    if !crate_dir.exists() {
+        eprintln!(
+            "error: expected directory not found: {}",
+            crate_dir.display()
+        );
+        process::exit(1);
+    }
+
+    let readme = find_readme(&crate_dir);
+
+    // Output
+    if args.path_only {
+        println!("{}", crate_dir.display());
+    } else if args.readme_only {
+        match readme {
+            Some(content) => print!("{}", content),
+            None => {
+                eprintln!("no README found in {}", crate_dir.display());
+                process::exit(1);
             }
         }
     } else {
-        let output = opts.output.as_ref().unwrap_or(&Output::Stdout);
-        match output {
-            &Output::Stdout => { io::stdout().write(&crate_bytes).unwrap(); }
-            &Output::Path(ref p) => {
-                let mut file = fs::OpenOptions::new()
-                    .write(true).create(true)
-                    .open(p).unwrap_or_else(|e| {
-                        error!("Failed to open output file {}: {}", p.display(), e);
-                        exit(exitcode::IOERR)
-                    });
-                file.write(&crate_bytes).unwrap();
-                info!("Crate's archive written to {}", p.display());
+        let output = Output {
+            name: spec.name,
+            version: version.to_string(),
+            path: crate_dir.display().to_string(),
+            readme,
+        };
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    }
+}
+
+fn default_cache_dir() -> PathBuf {
+    dirs_cache().join("cargo-download")
+}
+
+/// Platform-appropriate cache directory.
+fn dirs_cache() -> PathBuf {
+    if let Ok(dir) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".cache");
+    }
+    // Fallback
+    PathBuf::from("/tmp")
+}
+
+/// Query crates.io for the latest version matching the spec.
+fn resolve_version(spec: &CrateSpec, verbose: bool) -> Result<Version, Box<dyn std::error::Error>> {
+    let versions_url = format!("{}/{}/versions", CRATES_API_ROOT, spec.name);
+    if verbose {
+        eprintln!("fetching versions from {}", versions_url);
+    }
+
+    let body: String = ureq::get(&versions_url)
+        .header(
+            "User-Agent",
+            "cargo-download (https://github.com/imazen/cargo-download)",
+        )
+        .call()?
+        .into_body()
+        .read_to_string()?;
+
+    let json: serde_json::Value = serde_json::from_str(&body)?;
+
+    let versions_array = json
+        .pointer("/versions")
+        .and_then(|v| v.as_array())
+        .ok_or("malformed response: missing /versions array")?;
+
+    // Parse all valid, non-yanked versions
+    let mut versions: Vec<Version> = versions_array
+        .iter()
+        .filter(|v| {
+            v.as_object()
+                .and_then(|o| o.get("yanked"))
+                .and_then(|y| y.as_bool())
+                != Some(true)
+        })
+        .filter_map(|v| {
+            v.as_object()
+                .and_then(|o| o.get("num"))
+                .and_then(|n| n.as_str())
+        })
+        .filter_map(|v| Version::parse(v).ok())
+        .collect();
+
+    if versions.is_empty() {
+        return Err(format!("no versions found for crate `{}`", spec.name).into());
+    }
+
+    // Apply version requirement filter
+    let version_req = match &spec.version_req {
+        Some(req) => VersionReq::parse(req)?,
+        None => VersionReq::STAR,
+    };
+
+    versions.sort_by(|a, b| b.cmp(a));
+
+    versions
+        .into_iter()
+        .find(|v| version_req.matches(v))
+        .ok_or_else(|| {
+            format!(
+                "no version of `{}` matches requirement `{}`",
+                spec.name, version_req
+            )
+            .into()
+        })
+}
+
+/// Download and extract a crate to the cache directory.
+fn download_and_extract(
+    name: &str,
+    version: &Version,
+    cache_root: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let download_url = format!("{}/{}/{}/download", CRATES_API_ROOT, name, version);
+
+    let response = ureq::get(&download_url)
+        .header(
+            "User-Agent",
+            "cargo-download (https://github.com/imazen/cargo-download)",
+        )
+        .call()?;
+
+    let mut bytes = Vec::new();
+    response.into_body().as_reader().read_to_end(&mut bytes)?;
+
+    // Ensure cache directory exists
+    fs::create_dir_all(cache_root)?;
+
+    // Extract tar.gz — crates.io archives contain a single top-level dir named {crate}-{version}
+    let gz = flate2::read::GzDecoder::new(&bytes[..]);
+    let mut archive = tar::Archive::new(gz);
+    archive.unpack(cache_root)?;
+
+    Ok(())
+}
+
+/// Find and read the README file in a crate directory.
+fn find_readme(dir: &Path) -> Option<String> {
+    // Check Cargo.toml for a custom readme field first
+    let cargo_toml = dir.join("Cargo.toml");
+    if let Ok(content) = fs::read_to_string(&cargo_toml) {
+        // Simple TOML parsing — look for readme = "..."
+        for line in content.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("readme") {
+                let rest = rest.trim();
+                if let Some(rest) = rest.strip_prefix('=') {
+                    let rest = rest.trim().trim_matches('"').trim_matches('\'');
+                    if !rest.is_empty() {
+                        let readme_path = dir.join(rest);
+                        if let Ok(readme) = fs::read_to_string(&readme_path) {
+                            return Some(readme);
+                        }
+                    }
+                }
             }
         }
     }
-}
 
-// Print an error that may occur while parsing arguments.
-fn print_args_error(e: ArgsError) -> io::Result<()> {
-    match e {
-        ArgsError::Parse(ref e) =>
-            // In case of generic parse error,
-            // message provided by the clap library will be the usage string.
-            writeln!(&mut io::stderr(), "{}", e.message),
-        e => {
-            writeln!(&mut io::stderr(), "Failed to parse arguments: {}", e)
+    // Common README filenames, in priority order
+    let candidates = [
+        "README.md",
+        "readme.md",
+        "Readme.md",
+        "README",
+        "readme",
+        "README.txt",
+        "readme.txt",
+        "README.rst",
+        "readme.rst",
+    ];
+
+    for candidate in &candidates {
+        let path = dir.join(candidate);
+        if let Ok(content) = fs::read_to_string(&path) {
+            return Some(content);
         }
     }
-}
 
-/// Log the program name, version, and other metadata.
-#[inline]
-fn log_signature() {
-    if log_enabled!(Info) {
-        let version = VERSION.map(|v| format!("v{}", v))
-            .unwrap_or_else(|| "<UNKNOWN VERSION>".into());
-        info!("{} {}", *NAME, version);
-    }
-}
-
-
-const CRATES_API_ROOT: &'static str = "https://crates.io/api/v1/crates";
-
-/// Talk to crates.io to get the newest version of given crate
-/// that matches specified version requirements.
-fn get_newest_version(crate_: &Crate) -> Result<Version, Box<Error>> {
-    let versions_url = format!("{}/{}/versions", CRATES_API_ROOT, crate_.name());
-    debug!("Fetching latest matching version of crate `{}` from {}", crate_, versions_url);
-    let response: Json = reqwest::get(&versions_url)?.json()?;
-
-    // TODO: rather that silently skipping over incorrect versions,
-    // report them as malformed response from crates.io
-    let mut versions = response.pointer("/versions").and_then(|vs| vs.as_array()).map(|vs| {
-        vs.iter().filter_map(|v| {
-            v.as_object().and_then(|v| v.get("num")).and_then(|n| n.as_str())
-        })
-        .filter_map(|v| Version::parse(v).ok())
-        .collect::<Vec<_>>()
-    }).ok_or_else(|| format!("malformed response from {}", versions_url))?;
-
-    if versions.is_empty() {
-        return Err("no valid versions found".into());
-    }
-
-    let version_req = crate_.version_requirement();
-    versions.sort_by(|a, b| b.cmp(a));
-    versions.into_iter().find(|v| version_req.matches(v))
-        .map(|v| { info!("Latest version of crate {} is {}", crate_, v); v.to_owned() })
-        .ok_or_else(|| "no matching version found".into())
-}
-
-/// Download given crate and return it as a vector of gzipped bytes.
-fn download_crate(name: &str, version: &Version) -> Result<Vec<u8>, Box<Error>> {
-    let download_url = format!("{}/{}/{}/download", CRATES_API_ROOT, name, version);
-    debug!("Downloading crate `{}=={}` from {}", name, version, download_url);
-    let mut response = reqwest::get(&download_url)?;
-
-    let content_length: Option<usize> = response.headers().get(CONTENT_LENGTH)
-        .and_then(|ct_len| ct_len.to_str().ok())
-        .and_then(|ct_len| ct_len.parse().ok());
-    trace!("Download size: {}", content_length.map_or("<unknown>".into(), |cl| format!("{} bytes", cl)));
-    let mut bytes = match content_length {
-        Some(cl) => Vec::with_capacity(cl),
-        None => Vec::new(),
-    };
-    response.read_to_end(&mut bytes)?;
-
-    info!("Crate `{}=={}` downloaded successfully", name, version);
-    Ok(bytes)
+    None
 }

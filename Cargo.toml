@@ -1,37 +1,27 @@
 [package]
 name = "cargo-download"
-version = "0.1.2"
-description = "Cargo subcommand for downloading crate sources"
-authors = ["Karol Kuczmarski <karol.kuczmarski@gmail.com>"]
-keywords = ["cargo", "subcommand", "download", "fetch"]
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Download and cache crate source code, designed for LLM tool use"
+authors = [
+    "Karol Kuczmarski <karol.kuczmarski@gmail.com>",
+    "Lilith River <lilith@imazen.io>",
+]
+keywords = ["cargo", "subcommand", "download", "fetch", "llm"]
 license = "MIT"
 readme = "README.md"
 categories = ["development-tools", "development-tools::cargo-plugins"]
-documentation = "https://docs.rs/cargo-download"
-homepage = "https://github.com/Xion/cargo-download"
-repository = "https://github.com/Xion/cargo-download.git"
+repository = "https://github.com/imazen/cargo-download.git"
 
 [[bin]]
 name = "cargo-download"
 
 [dependencies]
-ansi_term = "0.9"
-clap = "2.26.0"
-conv = "0.3"
-derive-error = "0.0.3"
-exitcode = "1.0"
-flate2 = "0.2"
-isatty = "0.1.1"
-itertools = "0.6"
-lazy_static = "0.2"
-log = "0.3"
-maplit = "0.1"
-reqwest = "0.9.5"
-semver = "0.9"
-serde_json = "1.0"
-slog = "1.5.2"
-slog-envlogger = "0.5"
-slog-stdlog = "1.1"
-slog-stream = "1.2"
-tar = "0.4"
-time = "0.1"
+clap = { version = "4.6.0", features = ["derive"] }
+flate2 = "1.1.9"
+semver = "1.0.27"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.149"
+tar = "0.4.45"
+ureq = "3.3.0"
