@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-/// Download and cache crate source code.
+/// Download crate source and show README + metadata.
 ///
-/// Extracts to a cache directory and returns the path + README.
+/// Extracts to a cache directory and displays frontmatter, README, and file listing.
 /// Always checks crates.io for the latest version, even if cached.
-/// Designed for LLM tool use — outputs JSON by default.
+/// Designed for LLM tool use.
 #[derive(Parser, Debug)]
-#[command(name = "cargo-download", bin_name = "cargo download", version)]
+#[command(name = "cargo-read", bin_name = "cargo read", version)]
 pub struct Args {
     /// Crate to download, optionally with version: CRATE or CRATE=VERSION
     ///
@@ -19,15 +19,19 @@ pub struct Args {
     ///   serde=~1.0     — tilde requirement
     pub crate_spec: String,
 
-    /// Override the cache directory (default: ~/.cache/cargo-download/)
+    /// Override the cache directory (default: ~/.cache/cargo-read/)
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
 
-    /// Output only the extracted directory path (no JSON, no README)
+    /// Output JSON instead of human/LLM-readable format
+    #[arg(long)]
+    pub json: bool,
+
+    /// Output only the extracted directory path
     #[arg(long)]
     pub path_only: bool,
 
-    /// Output only the README content (no JSON, no path)
+    /// Output only the README content
     #[arg(long, conflicts_with = "path_only")]
     pub readme_only: bool,
 
@@ -70,9 +74,9 @@ pub fn parse_crate_spec(spec: &str) -> CrateSpec {
 }
 
 pub fn parse() -> Args {
-    // Handle `cargo download` invocation where cargo passes "download" as first arg
+    // Handle `cargo read` invocation where cargo passes "read" as first arg
     let mut raw_args: Vec<String> = std::env::args().collect();
-    if raw_args.len() >= 2 && raw_args[1] == "download" {
+    if raw_args.len() >= 2 && raw_args[1] == "read" {
         raw_args.remove(1);
     }
     Args::parse_from(raw_args)

@@ -1,9 +1,9 @@
 [package]
-name = "cargo-download"
-version = "0.2.0"
+name = "cargo-read"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Download and cache crate source code, designed for LLM tool use"
+description = "Download crate source and show README + metadata, designed for LLM tool use"
 authors = [
     "Karol Kuczmarski <karol.kuczmarski@gmail.com>",
     "Lilith River <lilith@imazen.io>",
@@ -12,10 +12,10 @@ keywords = ["cargo", "subcommand", "download", "fetch", "llm"]
 license = "MIT"
 readme = "README.md"
 categories = ["development-tools", "development-tools::cargo-plugins"]
-repository = "https://github.com/imazen/cargo-download.git"
+repository = "https://github.com/imazen/cargo-read.git"
 
 [[bin]]
-name = "cargo-download"
+name = "cargo-read"
 
 [dependencies]
 clap = { version = "4.6.0", features = ["derive"] }
