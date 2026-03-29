@@ -82,6 +82,7 @@ version = "0.3.0"
 dependencies = [
  "clap",
  "flate2",
+ "rustdoc-types",
  "semver",
  "serde",
  "serde_json",
@@ -351,6 +352,16 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rustdoc-types"
+version = "0.57.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e6919c49bdd9cca072b3b502d16c073d0a4d3b7283ff6e0c86a5f6e6b07bbfe"
+dependencies = [
+ "serde",
+ "serde_derive",
 ]
 
 [[package]]

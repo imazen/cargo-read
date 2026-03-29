@@ -2,6 +2,7 @@
 
 mod api_scan;
 mod args;
+mod rustdoc_render;
 
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -114,6 +115,20 @@ fn main() {
             None => {
                 eprintln!("no README found in {}", crate_dir.display());
                 process::exit(1);
+            }
+        }
+    } else if args.render_docs {
+        match rustdoc_render::render_docs(&crate_dir, &spec.name) {
+            Ok(md) => print!("{}", md),
+            Err(e) => {
+                eprintln!("error: {e}");
+                eprintln!("Falling back to source-level docs...");
+                eprintln!();
+                let api_items = api_scan::scan_public_api(&crate_dir, &spec.name);
+                print!(
+                    "{}",
+                    api_scan::format_docs(&spec.name, &crate_dir, &api_items)
+                );
             }
         }
     } else if args.api || args.docs {

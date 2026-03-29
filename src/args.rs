@@ -32,8 +32,12 @@ pub struct Args {
     pub api: bool,
 
     /// Show public API with doc comments (source-level extraction)
-    #[arg(long, conflicts_with_all = ["path_only", "readme_only", "api"])]
+    #[arg(long, conflicts_with_all = ["path_only", "readme_only", "api", "render_docs"])]
     pub docs: bool,
+
+    /// Generate full rendered docs from rustdoc JSON (requires nightly)
+    #[arg(long, conflicts_with_all = ["path_only", "readme_only", "api", "docs"])]
+    pub render_docs: bool,
 
     /// Output only the extracted directory path
     #[arg(long)]
