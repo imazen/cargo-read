@@ -27,6 +27,10 @@ pub struct Args {
     #[arg(long)]
     pub json: bool,
 
+    /// Show public API skeleton (source-level scan, no compilation needed)
+    #[arg(long, conflicts_with_all = ["path_only", "readme_only"])]
+    pub api: bool,
+
     /// Output only the extracted directory path
     #[arg(long)]
     pub path_only: bool,

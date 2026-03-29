@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod api_scan;
 mod args;
 
 use std::fmt::Write as FmtWrite;
@@ -43,6 +44,15 @@ struct JsonOutput {
     path: String,
     readme: Option<String>,
     files: Vec<String>,
+}
+
+/// JSON output for --api --json.
+#[derive(Serialize)]
+struct ApiJsonOutput {
+    #[serde(flatten)]
+    meta: CrateMeta,
+    path: String,
+    items: Vec<api_scan::ApiItem>,
 }
 
 fn main() {
@@ -106,6 +116,21 @@ fn main() {
                 process::exit(1);
             }
         }
+    } else if args.api {
+        let api_items = api_scan::scan_public_api(&crate_dir, &spec.name);
+        if args.json {
+            let output = ApiJsonOutput {
+                meta,
+                path: crate_dir.display().to_string(),
+                items: api_items,
+            };
+            println!("{}", serde_json::to_string_pretty(&output).unwrap());
+        } else {
+            print!(
+                "{}",
+                api_scan::format_api(&spec.name, &crate_dir, &api_items)
+            );
+        }
     } else if args.json {
         let output = JsonOutput {
             meta,
@@ -117,7 +142,7 @@ fn main() {
     } else {
         print!(
             "{}",
-            format_natural(&meta, &crate_dir, readme.as_deref(), &files)
+            format_natural(&meta, &crate_dir, readme.as_deref(), &files, &spec.name)
         );
     }
 }
@@ -128,6 +153,7 @@ fn format_natural(
     crate_dir: &Path,
     readme: Option<&str>,
     files: &[String],
+    crate_name: &str,
 ) -> String {
     let mut out = String::new();
 
@@ -193,6 +219,13 @@ fn format_natural(
         let abs = crate_dir.join(f);
         writeln!(out, "{}", abs.display()).unwrap();
     }
+
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        "Hint: Run `cargo read --api {crate_name}` to see the public API structure"
+    )
+    .unwrap();
 
     out
 }
@@ -746,7 +779,7 @@ mod tests {
             ..Default::default()
         };
         let dir = PathBuf::from("/tmp/foo-1.0.0");
-        let output = format_natural(&meta, &dir, None, &[]);
+        let output = format_natural(&meta, &dir, None, &[], "foo");
 
         assert!(output.starts_with("---\n"));
         assert!(output.contains("crate: foo\n"));
@@ -754,6 +787,7 @@ mod tests {
         assert!(output.contains("path: /tmp/foo-1.0.0\n"));
         assert!(output.contains("---\n"));
         assert!(output.contains("## Files\n"));
+        assert!(output.contains("cargo read --api foo"));
         // No description/license/etc lines
         assert!(!output.contains("description:"));
         assert!(!output.contains("license:"));
@@ -780,7 +814,7 @@ mod tests {
         let dir = PathBuf::from("/cache/bar-2.3.4");
         let readme = Some("# Bar\nA crate.\n");
         let files = vec!["README.md".into(), "src/lib.rs".into()];
-        let output = format_natural(&meta, &dir, readme, &files);
+        let output = format_natural(&meta, &dir, readme, &files, "bar");
 
         assert!(output.contains("description: A test crate\n"));
         assert!(output.contains("license: MIT\n"));
@@ -809,7 +843,7 @@ mod tests {
             ..Default::default()
         };
         let dir = PathBuf::from("/tmp/x-0.1.0");
-        let output = format_natural(&meta, &dir, None, &[]);
+        let output = format_natural(&meta, &dir, None, &[], "x");
         assert!(output.contains("repository:"));
         assert!(!output.contains("homepage:"));
     }
@@ -822,7 +856,7 @@ mod tests {
             ..Default::default()
         };
         let dir = PathBuf::from("/tmp/x-0.1.0");
-        let output = format_natural(&meta, &dir, Some("no newline"), &[]);
+        let output = format_natural(&meta, &dir, Some("no newline"), &[], "x");
         // Should still have a newline after the readme
         assert!(output.contains("no newline\n"));
     }
