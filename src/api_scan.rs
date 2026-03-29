@@ -126,6 +126,7 @@ fn scan_module(crate_dir: &Path, file: &Path, module_path: &str, items: &mut Vec
     let mut i = 0;
     let mut brace_depth: i32 = 0;
     let mut impl_stack: Vec<(i32, String)> = Vec::new(); // (depth, type_name)
+    let mut skip_until_depth: Vec<i32> = Vec::new(); // brace depths to skip past (macro_rules!, non-pub mod)
     let mut pending_cfg: Option<String> = None;
     let mut doc_hidden = false;
     let mut in_block_comment = false;
@@ -172,10 +173,42 @@ fn scan_module(crate_dir: &Path, file: &Path, module_path: &str, items: &mut Vec
             continue;
         }
 
-        // Track brace depth for impl blocks
+        // Track brace depth for impl blocks and skip scopes
         let depth_change = count_braces(line);
         let old_depth = brace_depth;
         brace_depth += depth_change;
+
+        // Pop skip scopes that have closed
+        while let Some(&skip_depth) = skip_until_depth.last() {
+            if brace_depth <= skip_depth {
+                skip_until_depth.pop();
+            } else {
+                break;
+            }
+        }
+
+        // Detect macro_rules! blocks — skip their entire body
+        if line.starts_with("macro_rules!") || line.contains("macro_rules!") {
+            if depth_change > 0 {
+                skip_until_depth.push(old_depth);
+            }
+            i += 1;
+            continue;
+        }
+
+        // Detect non-pub inline mod blocks — skip their body
+        // (items pub within a private mod are not part of the crate's public API)
+        if line.starts_with("mod ") && !line.starts_with("mod test") && line.contains('{') {
+            skip_until_depth.push(old_depth);
+            i += 1;
+            continue;
+        }
+
+        // If we're inside a skip scope, don't emit items
+        if !skip_until_depth.is_empty() {
+            i += 1;
+            continue;
+        }
 
         // Detect impl blocks at the current brace level
         if line.starts_with("impl") || line.starts_with("pub") && line.contains(" impl ") {
