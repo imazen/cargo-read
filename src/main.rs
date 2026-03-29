@@ -23,6 +23,8 @@ struct Output {
     path: String,
     /// README content, if found
     readme: Option<String>,
+    /// Relative paths of .rs and .md files in the crate
+    files: Vec<String>,
 }
 
 fn main() {
@@ -73,6 +75,7 @@ fn main() {
     }
 
     let readme = find_readme(&crate_dir);
+    let files = list_files(&crate_dir);
 
     // Output
     if args.path_only {
@@ -91,6 +94,7 @@ fn main() {
             version: version.to_string(),
             path: crate_dir.display().to_string(),
             readme,
+            files,
         };
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
     }
@@ -249,4 +253,32 @@ fn find_readme(dir: &Path) -> Option<String> {
     }
 
     None
+}
+
+/// List .rs and .md files in a crate directory, returning relative paths sorted.
+fn list_files(dir: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    collect_files(dir, dir, &mut files);
+    files.sort();
+    files
+}
+
+fn collect_files(base: &Path, dir: &Path, out: &mut Vec<String>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files(base, &path, out);
+        } else if let Some(ext) = path.extension() {
+            if ext == "rs" || ext == "md" {
+                if let Ok(rel) = path.strip_prefix(base) {
+                    // Normalize to forward slashes for consistent cross-platform output
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
 }
