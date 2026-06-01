@@ -13,6 +13,13 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 categories = ["development-tools", "development-tools::cargo-plugins"]
 repository = "https://github.com/imazen/cargo-read.git"
+exclude = [
+    ".github/",
+    ".gitignore",
+    "CLAUDE.md",
+    "justfile",
+    ".workongoing",
+]
 
 [[bin]]
 name = "cargo-read"
